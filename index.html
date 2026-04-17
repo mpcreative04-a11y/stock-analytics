@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes">
-    <title>Складской аналитик ·</title>
+    <title>Складской аналитик · ЭЛИТ (синхронизация)</title>
     <link href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,400;500;600;700;800&display=swap" rel="stylesheet">
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
     <script src="https://cdn.sheetjs.com/xlsx-0.20.2/package/dist/xlsx.full.min.js"></script>
@@ -152,6 +152,7 @@
         .footer-note { text-align: center; font-size: 0.75rem; margin-top: 28px; color: #2c6979; }
         body.dark .footer-note { color: #99c2d0; }
         @media (max-width: 700px) { .card-body { padding: 16px; } .stat-value { font-size: 1.2rem; } }
+        .sync-status { font-size: 0.8rem; margin-left: 12px; }
     </style>
 </head>
 <body>
@@ -160,7 +161,7 @@
         <div class="main-content">
             <div class="glass-card">
                 <div class="card-header">
-                    <h1>📦 Складской аналитик · Калейдоскоп</h1>
+                    <h1>📦 Складской аналитик · ЭЛИТ</h1>
                     <button class="theme-toggle" id="themeToggle">🌙 Тёмная тема</button>
                 </div>
                 <div class="card-body">
@@ -204,18 +205,27 @@
                         <button id="demoBtn" class="btn-outline">📈 Демо</button>
                         <button id="resetBtn" class="btn-outline">⟳ Сброс</button>
                         <button id="saveSnapshotBtn" class="btn-outline">📸 Снимок</button>
+                        <button id="shareLinkBtn" class="btn-outline">🔗 Поделиться ссылкой</button>
+                    </div>
+                    <!-- Новый блок синхронизации -->
+                    <div style="display: flex; align-items: center; gap: 16px; margin: 16px 0; flex-wrap: wrap;">
+                        <button id="syncFromLinkBtn" class="btn-outline" style="background: rgba(30,143,122,0.1);">🔄 Синхронизировать по ссылке</button>
+                        <div class="checkbox-label">
+                            <input type="checkbox" id="autoSyncCheck"> ⏱️ Автосинхронизация (каждые 5 мин)
+                        </div>
+                        <span id="syncSourceInfo" class="sync-status"></span>
                     </div>
                     <canvas id="stockChart"></canvas>
                     <div class="stats-grid" id="statsPanel"></div>
                     <div class="table-wrapper">
                         <table id="dataTable">
-                            <thead><tr><th data-sort="date">📅 Дата ↕</th><th data-sort="qty">📦 Остаток ↕</th><th>✏️ Действия</th></thead>
+                            <thead><tr><th data-sort="date">📅 Дата ↕</th><th data-sort="qty">📦 Остаток ↕</th><th>✏️ Действия</th></tr></thead>
                             <tbody id="tableBody"><tr><td colspan="3">Загрузка...</td></tbody>
                         </table>
                     </div>
                     <div class="footer-note">
                         ✨ Красная строка — ниже порога. Жёлтая — аномалия. Оранжевая линия — прогноз на 7 дней.<br>
-                        📸 Снимки: 👁️ предпросмотр, затем восстановление.
+                        🔗 Ссылка кодирует все данные. Используйте «Синхронизировать», чтобы получить свежую версию.
                     </div>
                 </div>
             </div>
@@ -238,513 +248,772 @@
     </div>
 </div>
 <script>
-    // ---------- ПОЛНАЯ ЛОГИКА (рабочая) ----------
-    const DEFAULT_RECORDS = [
-        { dateISO: "2026-04-14", displayDate: "14.04.2026", quantity: 32089 },
-        { dateISO: "2026-04-15", displayDate: "15.04.2026", quantity: 31289 }
-    ];
-    let records = [];
-    let chart = null;
-    let currentSort = { column: 'date', ascending: true };
-    let editingRowId = null;
-    let criticalThreshold = 5000;
-    let showMovingAvg = false;
-    let snapshots = [];
-    let currentPreviewSnapshotId = null;
+    (function(){
+        "use strict";
 
-    // DOM
-    const dateInput = document.getElementById('dateInput');
-    const qtyInput = document.getElementById('qtyInput');
-    const addBtn = document.getElementById('addBtn');
-    const resetBtn = document.getElementById('resetBtn');
-    const exportJsonBtn = document.getElementById('exportJsonBtn');
-    const exportCsvBtn = document.getElementById('exportCsvBtn');
-    const importBtn = document.getElementById('importBtn');
-    const importFile = document.getElementById('importFile');
-    const downloadTemplateBtn = document.getElementById('downloadTemplateBtn');
-    const excelUploadBtn = document.getElementById('excelUploadBtn');
-    const excelFile = document.getElementById('excelFile');
-    const googleExportBtn = document.getElementById('googleExportBtn');
-    const googleImportBtn = document.getElementById('googleImportBtn');
-    const demoBtn = document.getElementById('demoBtn');
-    const tableBody = document.getElementById('tableBody');
-    const statsPanel = document.getElementById('statsPanel');
-    const themeToggle = document.getElementById('themeToggle');
-    const thresholdSlider = document.getElementById('criticalThreshold');
-    const thresholdSpan = document.getElementById('thresholdValue');
-    const showMovingAvgCheck = document.getElementById('showMovingAvg');
-    const saveSnapshotBtn = document.getElementById('saveSnapshotBtn');
-    const snapshotListDiv = document.getElementById('snapshotList');
-    const clearAllSnapshotsBtn = document.getElementById('clearAllSnapshots');
-    const quickMinus100 = document.getElementById('quickMinus100');
-    const quickMinus500 = document.getElementById('quickMinus500');
-    const quickPlus100 = document.getElementById('quickPlus100');
-    const modal = document.getElementById('previewModal');
-    const closeModalBtn = document.getElementById('closeModalBtn');
-    const restoreFromPreviewBtn = document.getElementById('restoreFromPreviewBtn');
+        // ---------- ДАННЫЕ И НАСТРОЙКИ ----------
+        const DEFAULT_RECORDS = [
+            { dateISO: "2026-04-14", displayDate: "14.04.2026", quantity: 32089 },
+            { dateISO: "2026-04-15", displayDate: "15.04.2026", quantity: 31289 }
+        ];
+        let records = [];
+        let chart = null;
+        let currentSort = { column: 'date', ascending: true };
+        let editingRowId = null;
+        let criticalThreshold = 5000;
+        let showMovingAvg = false;
+        let snapshots = [];
+        let currentPreviewSnapshotId = null;
+        // Синхронизация
+        let syncSourceUrl = null;            // URL, из которого были загружены данные
+        let lastSyncHash = null;             // хеш последних синхронизированных данных
+        let autoSyncTimer = null;
+        const AUTO_SYNC_INTERVAL = 5 * 60 * 1000; // 5 минут
 
-    function parseDateToISO(dateStr) {
-        if (!dateStr) return null;
-        let str = dateStr.toString().trim();
-        if (str.match(/^\d{4}-\d{2}-\d{2}$/)) return str;
-        if (str.includes('.')) {
-            let parts = str.split('.');
-            if (parts.length === 3) return `${parts[2]}-${parts[1].padStart(2,'0')}-${parts[0].padStart(2,'0')}`;
-        }
-        let d = new Date(str);
-        return isNaN(d.getTime()) ? null : d.toISOString().split('T')[0];
-    }
-    function formatDisplayFromISO(iso) {
-        if (!iso) return '';
-        let parts = iso.split('-');
-        return `${parts[2]}.${parts[1]}.${parts[0]}`;
-    }
-    function sortRecords() {
-        records.sort((a,b) => {
-            let valA = currentSort.column === 'date' ? new Date(a.dateISO) : a.quantity;
-            let valB = currentSort.column === 'date' ? new Date(b.dateISO) : b.quantity;
-            if (valA < valB) return currentSort.ascending ? -1 : 1;
-            if (valA > valB) return currentSort.ascending ? 1 : -1;
-            return 0;
-        });
-    }
-    function saveToLocalStorage() {
-        localStorage.setItem('stockAnalyticsMax', JSON.stringify(records));
-        localStorage.setItem('criticalThreshold', criticalThreshold);
-        localStorage.setItem('snapshots', JSON.stringify(snapshots));
-    }
-    function loadFromLocalStorage() {
-        const stored = localStorage.getItem('stockAnalyticsMax');
-        if (stored) {
-            try { records = JSON.parse(stored); if (!Array.isArray(records)) records = DEFAULT_RECORDS.map(r=>({...r})); }
-            catch(e){ records = DEFAULT_RECORDS.map(r=>({...r})); }
-        } else { records = DEFAULT_RECORDS.map(r=>({...r})); }
-        const storedThresh = localStorage.getItem('criticalThreshold');
-        if (storedThresh) criticalThreshold = parseInt(storedThresh);
-        thresholdSlider.value = criticalThreshold;
-        thresholdSpan.innerText = criticalThreshold;
-        const storedSnap = localStorage.getItem('snapshots');
-        if (storedSnap) {
-            try { snapshots = JSON.parse(storedSnap); if (!Array.isArray(snapshots)) snapshots = []; }
-            catch(e){ snapshots = []; }
-        } else { snapshots = []; }
-    }
-    function detectAnomalies(records) {
-        if (records.length < 3) return [];
-        let changes = [];
-        for (let i=1; i<records.length; i++) changes.push(records[i-1].quantity - records[i].quantity);
-        let mean = changes.reduce((a,b)=>a+b,0)/changes.length;
-        let variance = changes.reduce((s,val)=>s + Math.pow(val-mean,2),0)/changes.length;
-        let stdDev = Math.sqrt(variance);
-        let anomalies = [];
-        for (let i=1; i<records.length; i++) {
-            let change = records[i-1].quantity - records[i].quantity;
-            if (Math.abs(change - mean) > 2 * stdDev) anomalies.push(i);
-        }
-        return anomalies;
-    }
-    function coefficientOfVariation(records) {
-        if (records.length < 2) return 0;
-        let changes = [];
-        for (let i=1; i<records.length; i++) changes.push(records[i-1].quantity - records[i].quantity);
-        let mean = changes.reduce((a,b)=>a+b,0)/changes.length;
-        if (mean === 0) return 0;
-        let variance = changes.reduce((s,val)=>s + Math.pow(val-mean,2),0)/changes.length;
-        let stdDev = Math.sqrt(variance);
-        return (stdDev / Math.abs(mean)) * 100;
-    }
-    function optimisticPessimisticForecast(records) {
-        if (records.length < 2) return null;
-        let changes = [];
-        for (let i=1; i<records.length; i++) changes.push(records[i-1].quantity - records[i].quantity);
-        let meanChange = changes.reduce((a,b)=>a+b,0)/changes.length;
-        if (meanChange <= 0) return null;
-        let variance = changes.reduce((s,val)=>s + Math.pow(val-meanChange,2),0)/changes.length;
-        let stdDev = Math.sqrt(variance);
-        let lastQty = records[records.length-1].quantity;
-        let optimisticDays = Math.floor(lastQty / (meanChange + stdDev));
-        let pessimisticDays = Math.ceil(lastQty / Math.max(0.1, meanChange - stdDev));
-        return { optimistic: optimisticDays, pessimistic: pessimisticDays };
-    }
-    function movingAverage(data, window=7) {
-        let result = [];
-        for (let i=0; i<data.length; i++) {
-            let start = Math.max(0, i-window+1);
-            let sum = 0;
-            for (let j=start; j<=i; j++) sum += data[j];
-            result.push(sum / (i-start+1));
-        }
-        return result;
-    }
-    function linearRegression(xValues, yValues) {
-        let n = xValues.length;
-        let sumX = 0, sumY = 0, sumXY = 0, sumX2 = 0;
-        for (let i=0;i<n;i++) { sumX += xValues[i]; sumY += yValues[i]; sumXY += xValues[i]*yValues[i]; sumX2 += xValues[i]*xValues[i]; }
-        let denom = n*sumX2 - sumX*sumX;
-        if (denom === 0) return { slope: 0, intercept: sumY/n };
-        let slope = (n*sumXY - sumX*sumY)/denom;
-        let intercept = (sumY - slope*sumX)/n;
-        return { slope, intercept };
-    }
-    function forecastDaysToZero(records) {
-        if (records.length < 2) return null;
-        const indices = records.map((_,i)=>i);
-        const quantities = records.map(r=>r.quantity);
-        const { slope, intercept } = linearRegression(indices, quantities);
-        if (slope >= 0) return null;
-        let xZero = -intercept / slope;
-        let lastIndex = indices[indices.length-1];
-        let days = Math.ceil(xZero - lastIndex);
-        return days > 0 ? days : 0;
-    }
-    function avgDailySales(records) {
-        if (records.length < 2) return 0;
-        let totalDelta = 0;
-        for (let i=1;i<records.length;i++) totalDelta += records[i].quantity - records[i-1].quantity;
-        return totalDelta / (records.length-1);
-    }
-    function updateStats() {
-        if (!records.length) { statsPanel.innerHTML = '<div class="stat-card">Нет данных</div>'; return; }
-        const first = records[0], last = records[records.length-1];
-        const absChange = last.quantity - first.quantity;
-        const percentChange = first.quantity ? (absChange/first.quantity)*100 : 0;
-        const avgDaily = avgDailySales(records);
-        const quantities = records.map(r=>r.quantity);
-        const minQty = Math.min(...quantities), maxQty = Math.max(...quantities);
-        const median = [...quantities].sort((a,b)=>a-b)[Math.floor(quantities.length/2)];
-        const forecastDays = forecastDaysToZero(records);
-        const cv = coefficientOfVariation(records);
-        const anomalies = detectAnomalies(records);
-        const optPess = optimisticPessimisticForecast(records);
-        let forecastHtml = '';
-        if (forecastDays !== null && forecastDays > 0) forecastHtml = `<div class="stat-card"><div class="stat-label">🔮 Прогноз (регрессия)</div><div class="stat-value trend-down">${forecastDays} дн.</div><div>до 0 шт</div></div>`;
-        else if (forecastDays === 0) forecastHtml = `<div class="stat-card"><div class="stat-label">⚠️ Критично</div><div class="stat-value trend-down">Уже закончился</div></div>`;
-        else forecastHtml = `<div class="stat-card"><div class="stat-label">📈 Тренд</div><div class="stat-value trend-up">Рост/стабильность</div></div>`;
-        let optHtml = '';
-        if (optPess && optPess.optimistic > 0) optHtml = `<div class="stat-card"><div class="stat-label">🎯 Диапазон прогноза</div><div class="stat-value">${optPess.pessimistic} – ${optPess.optimistic} дн.</div><div>пессим. / оптим.</div></div>`;
-        statsPanel.innerHTML = `
-            <div class="stat-card"><div class="stat-label">Начальный остаток</div><div class="stat-value">${first.quantity.toLocaleString()}</div><div>${first.displayDate}</div></div>
-            <div class="stat-card"><div class="stat-label">Текущий остаток</div><div class="stat-value">${last.quantity.toLocaleString()}</div><div>${last.displayDate}</div></div>
-            <div class="stat-card"><div class="stat-label">Изменение</div><div class="stat-value ${absChange<0?'trend-down':'trend-up'}">${absChange>0?'+':''}${absChange.toLocaleString()}</div><div>${percentChange.toFixed(1)}%</div></div>
-            <div class="stat-card"><div class="stat-label">Ср. дневное изменение</div><div class="stat-value ${avgDaily<0?'trend-down':'trend-up'}">${avgDaily>0?'+':''}${avgDaily.toFixed(1)}</div></div>
-            <div class="stat-card"><div class="stat-label">Коэф. вариации продаж</div><div class="stat-value">${cv.toFixed(1)}%</div><div>${cv<15?'стабильно':cv<40?'средне':'нестабильно'}</div></div>
-            <div class="stat-card"><div class="stat-label">Аномалии (выбросы)</div><div class="stat-value">${anomalies.length}</div><div>изменений >2σ</div></div>
-            ${forecastHtml}
-            ${optHtml}
-        `;
-    }
-    function renderTable() {
-        if (!tableBody) return;
-        if (!records.length) { tableBody.innerHTML = '<tr><td colspan="3">Нет данных. Добавьте первую запись.</td></tr>'; return; }
-        const anomalies = detectAnomalies(records);
-        let html = '';
-        records.forEach((rec, idx) => {
-            const isEditing = (editingRowId === idx);
-            const criticalClass = rec.quantity < criticalThreshold ? 'critical-row' : '';
-            const anomalyClass = anomalies.includes(idx) ? 'anomaly-row' : '';
-            const rowClass = criticalClass || anomalyClass;
-            if (isEditing) {
-                html += `<tr class="${rowClass}"><td><input type="text" id="editDate" value="${rec.displayDate}" style="width:110px"></td>
-                        <td><input type="number" id="editQty" value="${rec.quantity}" style="width:100px"></td>
-                        <td><button class="save-btn" data-idx="${idx}">💾 Сохранить</button><button class="cancel-btn" data-idx="${idx}">❌</button></td>
-                        </tr>`;
-            } else {
-                html += `<tr class="${rowClass}"><td>${rec.displayDate}</td>
-                        <td>${rec.quantity.toLocaleString()}</td>
-                        <td><button class="edit-btn" data-idx="${idx}">✏️</button><button class="delete-btn" data-idx="${idx}">🗑️</button></td>
-                        </tr>`;
+        // DOM элементы
+        const dateInput = document.getElementById('dateInput');
+        const qtyInput = document.getElementById('qtyInput');
+        const addBtn = document.getElementById('addBtn');
+        const resetBtn = document.getElementById('resetBtn');
+        const exportJsonBtn = document.getElementById('exportJsonBtn');
+        const exportCsvBtn = document.getElementById('exportCsvBtn');
+        const importBtn = document.getElementById('importBtn');
+        const importFile = document.getElementById('importFile');
+        const downloadTemplateBtn = document.getElementById('downloadTemplateBtn');
+        const excelUploadBtn = document.getElementById('excelUploadBtn');
+        const excelFile = document.getElementById('excelFile');
+        const googleExportBtn = document.getElementById('googleExportBtn');
+        const googleImportBtn = document.getElementById('googleImportBtn');
+        const demoBtn = document.getElementById('demoBtn');
+        const tableBody = document.getElementById('tableBody');
+        const statsPanel = document.getElementById('statsPanel');
+        const themeToggle = document.getElementById('themeToggle');
+        const thresholdSlider = document.getElementById('criticalThreshold');
+        const thresholdSpan = document.getElementById('thresholdValue');
+        const showMovingAvgCheck = document.getElementById('showMovingAvg');
+        const saveSnapshotBtn = document.getElementById('saveSnapshotBtn');
+        const snapshotListDiv = document.getElementById('snapshotList');
+        const clearAllSnapshotsBtn = document.getElementById('clearAllSnapshots');
+        const quickMinus100 = document.getElementById('quickMinus100');
+        const quickMinus500 = document.getElementById('quickMinus500');
+        const quickPlus100 = document.getElementById('quickPlus100');
+        const modal = document.getElementById('previewModal');
+        const closeModalBtn = document.getElementById('closeModalBtn');
+        const restoreFromPreviewBtn = document.getElementById('restoreFromPreviewBtn');
+        const shareLinkBtn = document.getElementById('shareLinkBtn');
+        const syncFromLinkBtn = document.getElementById('syncFromLinkBtn');
+        const autoSyncCheck = document.getElementById('autoSyncCheck');
+        const syncSourceInfo = document.getElementById('syncSourceInfo');
+
+        // ---------- УТИЛИТЫ ДАТ ----------
+        function parseDateToISO(dateStr) {
+            if (!dateStr) return null;
+            let str = dateStr.toString().trim();
+            if (str.match(/^\d{4}-\d{2}-\d{2}$/)) return str;
+            if (str.includes('.')) {
+                let parts = str.split('.');
+                if (parts.length === 3) return `${parts[2]}-${parts[1].padStart(2,'0')}-${parts[0].padStart(2,'0')}`;
             }
-        });
-        tableBody.innerHTML = html;
-        attachTableEvents();
-    }
-    function attachTableEvents() {
-        document.querySelectorAll('.edit-btn').forEach(btn => btn.addEventListener('click', (e) => { editingRowId = parseInt(btn.dataset.idx); renderTable(); }));
-        document.querySelectorAll('.delete-btn').forEach(btn => btn.addEventListener('click', (e) => { if(confirm('Удалить?')) { records.splice(parseInt(btn.dataset.idx),1); editingRowId=null; sortAndRefresh(); } }));
-        document.querySelectorAll('.save-btn').forEach(btn => btn.addEventListener('click', (e) => {
-            const idx = parseInt(btn.dataset.idx);
-            const newDateStr = document.getElementById('editDate').value;
-            const newQty = parseInt(document.getElementById('editQty').value);
-            if (isNaN(newQty)) { alert('Некорректное количество'); return; }
-            const newISO = parseDateToISO(newDateStr);
-            if (!newISO) { alert('Неверный формат даты'); return; }
-            records[idx].dateISO = newISO;
-            records[idx].displayDate = formatDisplayFromISO(newISO);
-            records[idx].quantity = newQty;
+            let d = new Date(str);
+            return isNaN(d.getTime()) ? null : d.toISOString().split('T')[0];
+        }
+        function formatDisplayFromISO(iso) {
+            if (!iso) return '';
+            let parts = iso.split('-');
+            return `${parts[2]}.${parts[1]}.${parts[0]}`;
+        }
+
+        // ---------- СОРТИРОВКА И ХРАНЕНИЕ ----------
+        function sortRecords() {
+            records.sort((a,b) => {
+                let valA = currentSort.column === 'date' ? new Date(a.dateISO) : a.quantity;
+                let valB = currentSort.column === 'date' ? new Date(b.dateISO) : b.quantity;
+                if (valA < valB) return currentSort.ascending ? -1 : 1;
+                if (valA > valB) return currentSort.ascending ? 1 : -1;
+                return 0;
+            });
+        }
+        function saveToLocalStorage() {
+            localStorage.setItem('stockAnalyticsMax', JSON.stringify(records));
+            localStorage.setItem('criticalThreshold', criticalThreshold);
+            localStorage.setItem('snapshots', JSON.stringify(snapshots));
+            if (syncSourceUrl) localStorage.setItem('syncSourceUrl', syncSourceUrl);
+            else localStorage.removeItem('syncSourceUrl');
+            if (lastSyncHash) localStorage.setItem('lastSyncHash', lastSyncHash);
+        }
+        function loadFromLocalStorage() {
+            const stored = localStorage.getItem('stockAnalyticsMax');
+            if (stored) {
+                try { records = JSON.parse(stored); if (!Array.isArray(records)) records = DEFAULT_RECORDS.map(r=>({...r})); }
+                catch(e){ records = DEFAULT_RECORDS.map(r=>({...r})); }
+            } else { records = DEFAULT_RECORDS.map(r=>({...r})); }
+            const storedThresh = localStorage.getItem('criticalThreshold');
+            if (storedThresh) criticalThreshold = parseInt(storedThresh);
+            thresholdSlider.value = criticalThreshold;
+            thresholdSpan.innerText = criticalThreshold;
+            const storedSnap = localStorage.getItem('snapshots');
+            if (storedSnap) {
+                try { snapshots = JSON.parse(storedSnap); if (!Array.isArray(snapshots)) snapshots = []; }
+                catch(e){ snapshots = []; }
+            } else { snapshots = []; }
+            // Загружаем сохранённый источник синхронизации
+            syncSourceUrl = localStorage.getItem('syncSourceUrl') || null;
+            lastSyncHash = localStorage.getItem('lastSyncHash') || null;
+            updateSyncUI();
+        }
+
+        // ---------- АНАЛИТИКА ----------
+        function detectAnomalies(records) {
+            if (records.length < 3) return [];
+            let changes = [];
+            for (let i=1; i<records.length; i++) changes.push(records[i-1].quantity - records[i].quantity);
+            let mean = changes.reduce((a,b)=>a+b,0)/changes.length;
+            let variance = changes.reduce((s,val)=>s + Math.pow(val-mean,2),0)/changes.length;
+            let stdDev = Math.sqrt(variance);
+            let anomalies = [];
+            for (let i=1; i<records.length; i++) {
+                let change = records[i-1].quantity - records[i].quantity;
+                if (Math.abs(change - mean) > 2 * stdDev) anomalies.push(i);
+            }
+            return anomalies;
+        }
+        function coefficientOfVariation(records) {
+            if (records.length < 2) return 0;
+            let changes = [];
+            for (let i=1; i<records.length; i++) changes.push(records[i-1].quantity - records[i].quantity);
+            let mean = changes.reduce((a,b)=>a+b,0)/changes.length;
+            if (mean === 0) return 0;
+            let variance = changes.reduce((s,val)=>s + Math.pow(val-mean,2),0)/changes.length;
+            let stdDev = Math.sqrt(variance);
+            return (stdDev / Math.abs(mean)) * 100;
+        }
+        function optimisticPessimisticForecast(records) {
+            if (records.length < 2) return null;
+            let changes = [];
+            for (let i=1; i<records.length; i++) changes.push(records[i-1].quantity - records[i].quantity);
+            let meanChange = changes.reduce((a,b)=>a+b,0)/changes.length;
+            if (meanChange <= 0) return null;
+            let variance = changes.reduce((s,val)=>s + Math.pow(val-meanChange,2),0)/changes.length;
+            let stdDev = Math.sqrt(variance);
+            let lastQty = records[records.length-1].quantity;
+            let optimisticDays = Math.floor(lastQty / (meanChange + stdDev));
+            let pessimisticDays = Math.ceil(lastQty / Math.max(0.1, meanChange - stdDev));
+            return { optimistic: optimisticDays, pessimistic: pessimisticDays };
+        }
+        function movingAverage(data, window=7) {
+            let result = [];
+            for (let i=0; i<data.length; i++) {
+                let start = Math.max(0, i-window+1);
+                let sum = 0;
+                for (let j=start; j<=i; j++) sum += data[j];
+                result.push(sum / (i-start+1));
+            }
+            return result;
+        }
+        function linearRegression(xValues, yValues) {
+            let n = xValues.length;
+            let sumX = 0, sumY = 0, sumXY = 0, sumX2 = 0;
+            for (let i=0;i<n;i++) { sumX += xValues[i]; sumY += yValues[i]; sumXY += xValues[i]*yValues[i]; sumX2 += xValues[i]*xValues[i]; }
+            let denom = n*sumX2 - sumX*sumX;
+            if (denom === 0) return { slope: 0, intercept: sumY/n };
+            let slope = (n*sumXY - sumX*sumY)/denom;
+            let intercept = (sumY - slope*sumX)/n;
+            return { slope, intercept };
+        }
+        function forecastDaysToZero(records) {
+            if (records.length < 2) return null;
+            const indices = records.map((_,i)=>i);
+            const quantities = records.map(r=>r.quantity);
+            const { slope, intercept } = linearRegression(indices, quantities);
+            if (slope >= 0) return null;
+            let xZero = -intercept / slope;
+            let lastIndex = indices[indices.length-1];
+            let days = Math.ceil(xZero - lastIndex);
+            return days > 0 ? days : 0;
+        }
+        function avgDailySales(records) {
+            if (records.length < 2) return 0;
+            let totalDelta = 0;
+            for (let i=1;i<records.length;i++) totalDelta += records[i].quantity - records[i-1].quantity;
+            return totalDelta / (records.length-1);
+        }
+
+        // ---------- ОБНОВЛЕНИЕ UI ----------
+        function updateStats() {
+            if (!records.length) { statsPanel.innerHTML = '<div class="stat-card">Нет данных</div>'; return; }
+            const first = records[0], last = records[records.length-1];
+            const absChange = last.quantity - first.quantity;
+            const percentChange = first.quantity ? (absChange/first.quantity)*100 : 0;
+            const avgDaily = avgDailySales(records);
+            const quantities = records.map(r=>r.quantity);
+            const forecastDays = forecastDaysToZero(records);
+            const cv = coefficientOfVariation(records);
+            const anomalies = detectAnomalies(records);
+            const optPess = optimisticPessimisticForecast(records);
+            let forecastHtml = '';
+            if (forecastDays !== null && forecastDays > 0) forecastHtml = `<div class="stat-card"><div class="stat-label">🔮 Прогноз (регрессия)</div><div class="stat-value trend-down">${forecastDays} дн.</div><div>до 0 шт</div></div>`;
+            else if (forecastDays === 0) forecastHtml = `<div class="stat-card"><div class="stat-label">⚠️ Критично</div><div class="stat-value trend-down">Уже закончился</div></div>`;
+            else forecastHtml = `<div class="stat-card"><div class="stat-label">📈 Тренд</div><div class="stat-value trend-up">Рост/стабильность</div></div>`;
+            let optHtml = '';
+            if (optPess && optPess.optimistic > 0) optHtml = `<div class="stat-card"><div class="stat-label">🎯 Диапазон прогноза</div><div class="stat-value">${optPess.pessimistic} – ${optPess.optimistic} дн.</div><div>пессим. / оптим.</div></div>`;
+            statsPanel.innerHTML = `
+                <div class="stat-card"><div class="stat-label">Начальный остаток</div><div class="stat-value">${first.quantity.toLocaleString()}</div><div>${first.displayDate}</div></div>
+                <div class="stat-card"><div class="stat-label">Текущий остаток</div><div class="stat-value">${last.quantity.toLocaleString()}</div><div>${last.displayDate}</div></div>
+                <div class="stat-card"><div class="stat-label">Изменение</div><div class="stat-value ${absChange<0?'trend-down':'trend-up'}">${absChange>0?'+':''}${absChange.toLocaleString()}</div><div>${percentChange.toFixed(1)}%</div></div>
+                <div class="stat-card"><div class="stat-label">Ср. дневное изменение</div><div class="stat-value ${avgDaily<0?'trend-down':'trend-up'}">${avgDaily>0?'+':''}${avgDaily.toFixed(1)}</div></div>
+                <div class="stat-card"><div class="stat-label">Коэф. вариации продаж</div><div class="stat-value">${cv.toFixed(1)}%</div><div>${cv<15?'стабильно':cv<40?'средне':'нестабильно'}</div></div>
+                <div class="stat-card"><div class="stat-label">Аномалии (выбросы)</div><div class="stat-value">${anomalies.length}</div><div>изменений >2σ</div></div>
+                ${forecastHtml}
+                ${optHtml}
+            `;
+        }
+
+        function renderTable() {
+            if (!tableBody) return;
+            if (!records.length) { tableBody.innerHTML = '<tr><td colspan="3">Нет данных. Добавьте первую запись.</td></tr>'; return; }
+            const anomalies = detectAnomalies(records);
+            let html = '';
+            records.forEach((rec, idx) => {
+                const isEditing = (editingRowId === idx);
+                const criticalClass = rec.quantity < criticalThreshold ? 'critical-row' : '';
+                const anomalyClass = anomalies.includes(idx) ? 'anomaly-row' : '';
+                const rowClass = criticalClass || anomalyClass;
+                if (isEditing) {
+                    html += `<tr class="${rowClass}"><td><input type="text" id="editDate" value="${rec.displayDate}" style="width:110px"></td>
+                            <td><input type="number" id="editQty" value="${rec.quantity}" style="width:100px"></td>
+                            <td><button class="save-btn" data-idx="${idx}">💾 Сохранить</button><button class="cancel-btn" data-idx="${idx}">❌</button></td>
+                            </tr>`;
+                } else {
+                    html += `<tr class="${rowClass}"><td>${rec.displayDate}</td>
+                            <td>${rec.quantity.toLocaleString()}</td>
+                            <td><button class="edit-btn" data-idx="${idx}">✏️</button><button class="delete-btn" data-idx="${idx}">🗑️</button></td>
+                            </tr>`;
+                }
+            });
+            tableBody.innerHTML = html;
+            attachTableEvents();
+        }
+        function attachTableEvents() {
+            document.querySelectorAll('.edit-btn').forEach(btn => btn.addEventListener('click', (e) => { editingRowId = parseInt(btn.dataset.idx); renderTable(); }));
+            document.querySelectorAll('.delete-btn').forEach(btn => btn.addEventListener('click', (e) => { if(confirm('Удалить?')) { records.splice(parseInt(btn.dataset.idx),1); editingRowId=null; sortAndRefresh(); } }));
+            document.querySelectorAll('.save-btn').forEach(btn => btn.addEventListener('click', (e) => {
+                const idx = parseInt(btn.dataset.idx);
+                const newDateStr = document.getElementById('editDate').value;
+                const newQty = parseInt(document.getElementById('editQty').value);
+                if (isNaN(newQty)) { alert('Некорректное количество'); return; }
+                const newISO = parseDateToISO(newDateStr);
+                if (!newISO) { alert('Неверный формат даты'); return; }
+                records[idx].dateISO = newISO;
+                records[idx].displayDate = formatDisplayFromISO(newISO);
+                records[idx].quantity = newQty;
+                editingRowId = null;
+                sortAndRefresh();
+            }));
+            document.querySelectorAll('.cancel-btn').forEach(btn => btn.addEventListener('click', () => { editingRowId = null; renderTable(); }));
+        }
+
+        function updateChart() {
+            const ctx = document.getElementById('stockChart').getContext('2d');
+            if (chart) chart.destroy();
+            if (records.length === 0) return;
+            const labels = records.map(r => r.displayDate);
+            const data = records.map(r => r.quantity);
+            let datasets = [{
+                label: 'Фактический остаток', data: data, borderColor: '#1e8f7a',
+                backgroundColor: 'rgba(30,143,122,0.15)', borderWidth: 3, pointRadius: 5, fill: true, tension: 0.2
+            }];
+            if (showMovingAvg && records.length >= 7) {
+                const ma = movingAverage(data, 7);
+                datasets.push({ label: 'Скользящее среднее (7 дн)', data: ma, borderColor: '#f4a261', borderWidth: 2, borderDash: [8,4], fill: false, pointRadius: 0 });
+            }
+            if (records.length >= 2) {
+                const indices = records.map((_,i)=>i);
+                const { slope, intercept } = linearRegression(indices, data);
+                const lastIndex = indices[indices.length-1];
+                const extendedLabels = [...labels];
+                const extendedData = [...data];
+                for (let i=1;i<=7;i++) {
+                    const newIdx = lastIndex+i;
+                    const pred = slope*newIdx+intercept;
+                    const lastDate = new Date(records[records.length-1].dateISO);
+                    lastDate.setDate(lastDate.getDate()+i);
+                    const futureDate = formatDisplayFromISO(lastDate.toISOString().split('T')[0]);
+                    extendedLabels.push(`📅 ${futureDate} (прогноз)`);
+                    extendedData.push(pred);
+                }
+                datasets.push({ label: 'Линия тренда + прогноз (7 дн)', data: extendedData, borderColor: '#e9b35f', borderWidth: 2, borderDash: [5,5], fill: false, pointRadius: 0 });
+                chart = new Chart(ctx, { type: 'line', data: { labels: extendedLabels, datasets }, options: { responsive: true, maintainAspectRatio: true, scales: { y: { ticks: { callback: (val) => val.toLocaleString() } } } } });
+            } else {
+                chart = new Chart(ctx, { type: 'line', data: { labels, datasets }, options: { responsive: true } });
+            }
+        }
+
+        function sortAndRefresh() {
+            sortRecords();
+            renderTable();
+            updateStats();
+            updateChart();
+            saveToLocalStorage();
+            // При изменении данных сбрасываем хеш синхронизации (данные уже не соответствуют источнику)
+            if (syncSourceUrl) {
+                lastSyncHash = null;
+                localStorage.removeItem('lastSyncHash');
+                updateSyncUI();
+            }
+        }
+
+        // ---------- ОПЕРАЦИИ С ЗАПИСЯМИ ----------
+        function addOrUpdate() {
+            let rawDate = dateInput.value;
+            if (!rawDate) { alert('Выберите дату в календаре'); return; }
+            let rawQty = qtyInput.value.trim();
+            if (rawQty === '') { alert('Введите количество'); return; }
+            let qty = parseInt(rawQty);
+            if (isNaN(qty) || qty < 0) { alert('Количество должно быть числом >=0'); return; }
+            const display = formatDisplayFromISO(rawDate);
+            const existingIndex = records.findIndex(r => r.dateISO === rawDate);
+            if (existingIndex !== -1) {
+                if (confirm(`Дата ${display} уже есть. Обновить остаток?`)) records[existingIndex].quantity = qty;
+            } else {
+                records.push({ dateISO: rawDate, displayDate: display, quantity: qty });
+            }
             editingRowId = null;
             sortAndRefresh();
-        }));
-        document.querySelectorAll('.cancel-btn').forEach(btn => btn.addEventListener('click', () => { editingRowId = null; renderTable(); }));
-    }
-    function updateChart() {
-        const ctx = document.getElementById('stockChart').getContext('2d');
-        if (chart) chart.destroy();
-        if (records.length === 0) return;
-        const labels = records.map(r => r.displayDate);
-        const data = records.map(r => r.quantity);
-        let datasets = [{
-            label: 'Фактический остаток', data: data, borderColor: '#1e8f7a',
-            backgroundColor: 'rgba(30,143,122,0.15)', borderWidth: 3, pointRadius: 5, fill: true, tension: 0.2
-        }];
-        if (showMovingAvg && records.length >= 7) {
-            const ma = movingAverage(data, 7);
-            datasets.push({ label: 'Скользящее среднее (7 дн)', data: ma, borderColor: '#f4a261', borderWidth: 2, borderDash: [8,4], fill: false, pointRadius: 0 });
+            qtyInput.value = '';
         }
-        if (records.length >= 2) {
-            const indices = records.map((_,i)=>i);
-            const { slope, intercept } = linearRegression(indices, data);
-            const lastIndex = indices[indices.length-1];
-            const extendedLabels = [...labels];
-            const extendedData = [...data];
-            for (let i=1;i<=7;i++) {
-                const newIdx = lastIndex+i;
-                const pred = slope*newIdx+intercept;
-                const lastDate = new Date(records[records.length-1].dateISO);
-                lastDate.setDate(lastDate.getDate()+i);
-                const futureDate = formatDisplayFromISO(lastDate.toISOString().split('T')[0]);
-                extendedLabels.push(`📅 ${futureDate} (прогноз)`);
-                extendedData.push(pred);
-            }
-            datasets.push({ label: 'Линия тренда + прогноз (7 дн)', data: extendedData, borderColor: '#e9b35f', borderWidth: 2, borderDash: [5,5], fill: false, pointRadius: 0 });
-            chart = new Chart(ctx, { type: 'line', data: { labels: extendedLabels, datasets }, options: { responsive: true, maintainAspectRatio: true, scales: { y: { ticks: { callback: (val) => val.toLocaleString() } } } } });
-        } else {
-            chart = new Chart(ctx, { type: 'line', data: { labels, datasets }, options: { responsive: true } });
+
+        function quickChange(delta) {
+            if (records.length === 0) { alert('Нет данных'); return; }
+            let last = records[records.length-1];
+            let newQty = last.quantity + delta;
+            if (newQty < 0) newQty = 0;
+            last.quantity = newQty;
+            sortAndRefresh();
         }
-    }
-    function sortAndRefresh() {
-        sortRecords();
-        renderTable();
-        updateStats();
-        updateChart();
-        saveToLocalStorage();
-    }
-    function addOrUpdate() {
-        let rawDate = dateInput.value;
-        if (!rawDate) { alert('Выберите дату в календаре'); return; }
-        let rawQty = qtyInput.value.trim();
-        if (rawQty === '') { alert('Введите количество'); return; }
-        let qty = parseInt(rawQty);
-        if (isNaN(qty) || qty < 0) { alert('Количество должно быть числом >=0'); return; }
-        const display = formatDisplayFromISO(rawDate);
-        const existingIndex = records.findIndex(r => r.dateISO === rawDate);
-        if (existingIndex !== -1) {
-            if (confirm(`Дата ${display} уже есть. Обновить остаток?`)) records[existingIndex].quantity = qty;
-        } else {
-            records.push({ dateISO: rawDate, displayDate: display, quantity: qty });
-        }
-        editingRowId = null;
-        sortAndRefresh();
-        qtyInput.value = '';
-    }
-    function quickChange(delta) {
-        if (records.length === 0) { alert('Нет данных'); return; }
-        let last = records[records.length-1];
-        let newQty = last.quantity + delta;
-        if (newQty < 0) newQty = 0;
-        last.quantity = newQty;
-        sortAndRefresh();
-    }
-    function saveSnapshot() {
-        const snapshot = { id: Date.now(), date: new Date().toLocaleString(), previewDate: records.length ? records[records.length-1].displayDate : 'нет данных', records: JSON.parse(JSON.stringify(records)) };
-        snapshots.unshift(snapshot);
-        if (snapshots.length > 20) snapshots.pop();
-        saveToLocalStorage();
-        renderSnapshots();
-    }
-    function renderSnapshots() {
-        if (!snapshotListDiv) return;
-        if (snapshots.length === 0) { snapshotListDiv.innerHTML = '<div style="color:gray; text-align:center;">Нет снимков</div>'; return; }
-        snapshotListDiv.innerHTML = snapshots.map(snap => `
-            <div class="snapshot-item" style="background:rgba(255,255,255,0.5); backdrop-filter:blur(4px); border-radius:24px; padding:12px; margin-bottom:12px;">
-                <div class="snapshot-date">📸 ${snap.date}</div>
-                <div style="font-size:0.7rem;">последняя дата: ${snap.previewDate}</div>
-                <div class="snapshot-actions" style="display:flex; gap:6px; margin-top:8px;">
-                    <button class="preview-snapshot" data-id="${snap.id}" style="padding:4px 12px; font-size:0.7rem;">👁️ Предпросмотр</button>
-                    <button class="restore-snapshot" data-id="${snap.id}" style="padding:4px 12px; font-size:0.7rem;">Восстановить</button>
-                    <button class="delete-snapshot" data-id="${snap.id}" style="padding:4px 12px; font-size:0.7rem;">Удалить</button>
-                </div>
-            </div>
-        `).join('');
-        document.querySelectorAll('.restore-snapshot').forEach(btn => btn.addEventListener('click', (e) => {
-            const id = parseInt(btn.dataset.id);
-            const snap = snapshots.find(s => s.id === id);
-            if (snap && confirm('Восстановить этот снимок?')) { records = JSON.parse(JSON.stringify(snap.records)); editingRowId = null; sortAndRefresh(); }
-        }));
-        document.querySelectorAll('.delete-snapshot').forEach(btn => btn.addEventListener('click', (e) => {
-            const id = parseInt(btn.dataset.id);
-            snapshots = snapshots.filter(s => s.id !== id);
+
+        // ---------- СНИМКИ ----------
+        function saveSnapshot() {
+            const snapshot = { id: Date.now(), date: new Date().toLocaleString(), previewDate: records.length ? records[records.length-1].displayDate : 'нет данных', records: JSON.parse(JSON.stringify(records)) };
+            snapshots.unshift(snapshot);
+            if (snapshots.length > 20) snapshots.pop();
             saveToLocalStorage();
             renderSnapshots();
-        }));
-        document.querySelectorAll('.preview-snapshot').forEach(btn => btn.addEventListener('click', (e) => {
-            const id = parseInt(btn.dataset.id);
-            const snap = snapshots.find(s => s.id === id);
-            if (snap) showPreview(snap);
-        }));
-    }
-    function showPreview(snapshot) {
-        currentPreviewSnapshotId = snapshot.id;
-        const recordsPreview = snapshot.records;
-        const previewDiv = document.getElementById('previewContent');
-        if (!previewDiv) return;
-        let tableHtml = '<div class="preview-table"><strong>Таблица (первые 5 записей):</strong><table style="width:100%; margin-top:8px;">';
-        tableHtml += '<tr><th>Дата</th><th>Остаток</th></tr>';
-        const showRecords = recordsPreview.slice(0,5);
-        showRecords.forEach(r => { tableHtml += `<tr><td>${r.displayDate}</td><td>${r.quantity.toLocaleString()}</td></tr>`; });
-        if (recordsPreview.length > 5) tableHtml += `<tr><td colspan="2">... и ещё ${recordsPreview.length-5} записей</td></tr>`;
-        tableHtml += '</table></div>';
-        const canvasId = 'previewCanvas';
-        tableHtml += `<canvas id="${canvasId}" class="preview-canvas" style="max-height:200px;"></canvas>`;
-        previewDiv.innerHTML = tableHtml;
-        modal.style.display = 'flex';
-        setTimeout(() => {
-            const ctx = document.getElementById(canvasId)?.getContext('2d');
-            if (ctx) {
-                const labels = recordsPreview.map(r => r.displayDate);
-                const data = recordsPreview.map(r => r.quantity);
-                new Chart(ctx, { type: 'line', data: { labels, datasets: [{ label: 'Остаток', data, borderColor: '#1e8f7a', fill: false, tension: 0.2 }] }, options: { responsive: true, maintainAspectRatio: true, plugins: { legend: { display: false } } } });
+        }
+        function renderSnapshots() {
+            if (!snapshotListDiv) return;
+            if (snapshots.length === 0) { snapshotListDiv.innerHTML = '<div style="color:gray; text-align:center;">Нет снимков</div>'; return; }
+            snapshotListDiv.innerHTML = snapshots.map(snap => `
+                <div class="snapshot-item" style="background:rgba(255,255,255,0.5); backdrop-filter:blur(4px); border-radius:24px; padding:12px; margin-bottom:12px;">
+                    <div class="snapshot-date">📸 ${snap.date}</div>
+                    <div style="font-size:0.7rem;">последняя дата: ${snap.previewDate}</div>
+                    <div class="snapshot-actions" style="display:flex; gap:6px; margin-top:8px;">
+                        <button class="preview-snapshot" data-id="${snap.id}" style="padding:4px 12px; font-size:0.7rem;">👁️ Предпросмотр</button>
+                        <button class="restore-snapshot" data-id="${snap.id}" style="padding:4px 12px; font-size:0.7rem;">Восстановить</button>
+                        <button class="delete-snapshot" data-id="${snap.id}" style="padding:4px 12px; font-size:0.7rem;">Удалить</button>
+                    </div>
+                </div>
+            `).join('');
+            document.querySelectorAll('.restore-snapshot').forEach(btn => btn.addEventListener('click', (e) => {
+                const id = parseInt(btn.dataset.id);
+                const snap = snapshots.find(s => s.id === id);
+                if (snap && confirm('Восстановить этот снимок?')) { records = JSON.parse(JSON.stringify(snap.records)); editingRowId = null; sortAndRefresh(); }
+            }));
+            document.querySelectorAll('.delete-snapshot').forEach(btn => btn.addEventListener('click', (e) => {
+                const id = parseInt(btn.dataset.id);
+                snapshots = snapshots.filter(s => s.id !== id);
+                saveToLocalStorage();
+                renderSnapshots();
+            }));
+            document.querySelectorAll('.preview-snapshot').forEach(btn => btn.addEventListener('click', (e) => {
+                const id = parseInt(btn.dataset.id);
+                const snap = snapshots.find(s => s.id === id);
+                if (snap) showPreview(snap);
+            }));
+        }
+        function showPreview(snapshot) {
+            currentPreviewSnapshotId = snapshot.id;
+            const recordsPreview = snapshot.records;
+            const previewDiv = document.getElementById('previewContent');
+            if (!previewDiv) return;
+            let tableHtml = '<div class="preview-table"><strong>Таблица (первые 5 записей):</strong><table style="width:100%; margin-top:8px;">';
+            tableHtml += '<tr><th>Дата</th><th>Остаток</th></tr>';
+            const showRecords = recordsPreview.slice(0,5);
+            showRecords.forEach(r => { tableHtml += `<tr><td>${r.displayDate}</td><td>${r.quantity.toLocaleString()}</td></tr>`; });
+            if (recordsPreview.length > 5) tableHtml += `<tr><td colspan="2">... и ещё ${recordsPreview.length-5} записей</td></tr>`;
+            tableHtml += '</table></div>';
+            const canvasId = 'previewCanvas';
+            tableHtml += `<canvas id="${canvasId}" class="preview-canvas" style="max-height:200px;"></canvas>`;
+            previewDiv.innerHTML = tableHtml;
+            modal.style.display = 'flex';
+            setTimeout(() => {
+                const ctx = document.getElementById(canvasId)?.getContext('2d');
+                if (ctx) {
+                    const labels = recordsPreview.map(r => r.displayDate);
+                    const data = recordsPreview.map(r => r.quantity);
+                    new Chart(ctx, { type: 'line', data: { labels, datasets: [{ label: 'Остаток', data, borderColor: '#1e8f7a', fill: false, tension: 0.2 }] }, options: { responsive: true, maintainAspectRatio: true, plugins: { legend: { display: false } } } });
+                }
+            }, 50);
+        }
+        function restoreFromPreview() {
+            const snap = snapshots.find(s => s.id === currentPreviewSnapshotId);
+            if (snap && confirm('Восстановить этот снимок?')) { records = JSON.parse(JSON.stringify(snap.records)); editingRowId = null; sortAndRefresh(); modal.style.display = 'none'; }
+        }
+        function clearAllSnapshots() { if (confirm('Удалить все снимки?')) { snapshots = []; saveToLocalStorage(); renderSnapshots(); } }
+
+        // ---------- ЭКСПОРТ / ИМПОРТ ----------
+        function exportToGoogleSheets() {
+            let csvRows = [["Дата","Остаток"]];
+            records.forEach(r => csvRows.push([r.displayDate, r.quantity]));
+            const csvContent = csvRows.map(row => row.join(",")).join("\n");
+            const blob = new Blob(["\uFEFF" + csvContent], {type: "text/csv;charset=utf-8;"});
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `stock_export_${new Date().toISOString().slice(0,19)}.csv`;
+            a.click();
+            URL.revokeObjectURL(url);
+            window.open('https://sheets.new', '_blank');
+            alert('CSV сохранён. В Google Sheets: Файл → Импорт → загрузите файл.');
+        }
+        function importFromGoogleSheets() {
+            const csvUrl = prompt('Введите публичную ссылку на CSV (опубликованный Google Sheets):');
+            if (!csvUrl) return;
+            fetch(csvUrl).then(res => res.text()).then(csvText => {
+                const rows = csvText.split(/\r?\n/).filter(line => line.trim());
+                if (rows.length < 2) throw new Error('Пусто');
+                const newRecords = [];
+                for (let i=1; i<rows.length; i++) {
+                    const cols = rows[i].split(',');
+                    let dateStr = cols[0]?.trim().replace(/^"|"$/g, '');
+                    let qty = parseInt(cols[1]?.trim().replace(/^"|"$/g, ''));
+                    if (dateStr && !isNaN(qty)) {
+                        let iso = parseDateToISO(dateStr);
+                        if (iso) newRecords.push({ dateISO: iso, displayDate: formatDisplayFromISO(iso), quantity: qty });
+                    }
+                }
+                if (newRecords.length===0) throw new Error('Нет данных');
+                if (confirm(`Найдено ${newRecords.length} записей. Заменить текущие?`)) records = newRecords;
+                else records.push(...newRecords);
+                sortAndRefresh();
+                alert(`Импортировано ${newRecords.length}`);
+            }).catch(err => alert('Ошибка: ' + err.message));
+        }
+        function downloadExcelTemplate() {
+            const templateData = [["Дата","Остаток"],["14.04.2026",32089],["15.04.2026",31289]];
+            if (typeof XLSX === 'undefined') {
+                let csv = templateData.map(row=>row.join(",")).join("\n");
+                const blob = new Blob(["\uFEFF"+csv], {type:"text/csv"});
+                const link = document.createElement('a');
+                link.href = URL.createObjectURL(blob);
+                link.download = `template_stock_${new Date().toISOString().slice(0,10)}.csv`;
+                link.click();
+                URL.revokeObjectURL(blob);
+                return;
             }
-        }, 50);
-    }
-    function restoreFromPreview() {
-        const snap = snapshots.find(s => s.id === currentPreviewSnapshotId);
-        if (snap && confirm('Восстановить этот снимок?')) { records = JSON.parse(JSON.stringify(snap.records)); editingRowId = null; sortAndRefresh(); modal.style.display = 'none'; }
-    }
-    function clearAllSnapshots() { if (confirm('Удалить все снимки?')) { snapshots = []; saveToLocalStorage(); renderSnapshots(); } }
-    function exportToGoogleSheets() {
-        let csvRows = [["Дата","Остаток"]];
-        records.forEach(r => csvRows.push([r.displayDate, r.quantity]));
-        const csvContent = csvRows.map(row => row.join(",")).join("\n");
-        const blob = new Blob(["\uFEFF" + csvContent], {type: "text/csv;charset=utf-8;"});
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = `stock_export_${new Date().toISOString().slice(0,19)}.csv`;
-        a.click();
-        URL.revokeObjectURL(url);
-        window.open('https://sheets.new', '_blank');
-        alert('CSV сохранён. В Google Sheets: Файл → Импорт → загрузите файл.');
-    }
-    function importFromGoogleSheets() {
-        const csvUrl = prompt('Введите публичную ссылку на CSV (опубликованный Google Sheets):');
-        if (!csvUrl) return;
-        fetch(csvUrl).then(res => res.text()).then(csvText => {
-            const rows = csvText.split(/\r?\n/).filter(line => line.trim());
-            if (rows.length < 2) throw new Error('Пусто');
-            const newRecords = [];
-            for (let i=1; i<rows.length; i++) {
-                const cols = rows[i].split(',');
-                let dateStr = cols[0]?.trim().replace(/^"|"$/g, '');
-                let qty = parseInt(cols[1]?.trim().replace(/^"|"$/g, ''));
-                if (dateStr && !isNaN(qty)) {
-                    let iso = parseDateToISO(dateStr);
-                    if (iso) newRecords.push({ dateISO: iso, displayDate: formatDisplayFromISO(iso), quantity: qty });
+            const ws = XLSX.utils.aoa_to_sheet(templateData);
+            const wb = XLSX.utils.book_new();
+            XLSX.utils.book_append_sheet(wb, ws, "Шаблон");
+            XLSX.writeFile(wb, `template_stock_${new Date().toISOString().slice(0,10)}.xlsx`);
+        }
+        function handleExcelUpload(file) {
+            if (typeof XLSX === 'undefined') { alert('XLSX не загружен'); return; }
+            const reader = new FileReader();
+            reader.onload = function(e) {
+                const data = new Uint8Array(e.target.result);
+                const workbook = XLSX.read(data, { type: 'array' });
+                const sheet = workbook.Sheets[workbook.SheetNames[0]];
+                const rows = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: "" });
+                let newRecords = [];
+                for (let i=1; i<rows.length; i++) {
+                    let dateVal = rows[i][0]?.toString().trim();
+                    let qtyVal = rows[i][1];
+                    if (!dateVal || qtyVal===undefined) continue;
+                    let qty = Number(qtyVal);
+                    if (isNaN(qty)) continue;
+                    let iso = parseDateToISO(dateVal);
+                    if (!iso) continue;
+                    newRecords.push({ dateISO: iso, displayDate: formatDisplayFromISO(iso), quantity: Math.floor(qty) });
+                }
+                if (newRecords.length===0) { alert('Нет корректных строк'); return; }
+                if (confirm(`Найдено ${newRecords.length} записей. Заменить текущие?`)) records = newRecords;
+                else records.push(...newRecords);
+                sortAndRefresh();
+            };
+            reader.readAsArrayBuffer(file);
+        }
+        function loadDemoData() {
+            if (confirm('Загрузить демо-данные (12 дней)?')) {
+                const demo = [];
+                let baseDate = new Date(2026,3,10);
+                let qty = 34000;
+                for (let i=0;i<12;i++) {
+                    let date = new Date(baseDate); date.setDate(baseDate.getDate()+i);
+                    let iso = date.toISOString().split('T')[0];
+                    qty = Math.max(2000, qty - Math.floor(Math.random()*500)-300);
+                    demo.push({ dateISO: iso, displayDate: formatDisplayFromISO(iso), quantity: qty });
+                }
+                records = demo;
+                sortAndRefresh();
+            }
+        }
+        function resetToDefault() { if (confirm('Сбросить к исходным данным?')) { records = DEFAULT_RECORDS.map(r=>({...r})); sortAndRefresh(); } }
+        function exportJSON() { const dataStr = JSON.stringify(records,null,2); const blob = new Blob([dataStr], {type:'application/json'}); const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = `stock_${new Date().toISOString().slice(0,19)}.json`; a.click(); URL.revokeObjectURL(blob); }
+        function exportCSV() { let csv = [["Дата","Остаток"]]; records.forEach(r=>csv.push([r.displayDate, r.quantity])); const blob = new Blob(["\uFEFF"+csv.map(row=>row.join(",")).join("\n")], {type:"text/csv"}); const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = `stock_${new Date().toISOString().slice(0,19)}.csv`; a.click(); URL.revokeObjectURL(blob); }
+        function importData(file) { const reader = new FileReader(); reader.onload = (e) => { try { const imported = JSON.parse(e.target.result); if (Array.isArray(imported) && imported.every(i=>i.dateISO && typeof i.quantity==='number')) { records = imported; sortAndRefresh(); } else alert('Неверный формат'); } catch(err) { alert('Ошибка JSON'); } }; reader.readAsText(file); }
+
+        // ---------- ОБЩИЙ ДОСТУП И СИНХРОНИЗАЦИЯ ----------
+        function computeDataHash(data) {
+            const json = JSON.stringify(data);
+            let hash = 0;
+            for (let i = 0; i < json.length; i++) {
+                const char = json.charCodeAt(i);
+                hash = ((hash << 5) - hash) + char;
+                hash |= 0;
+            }
+            return hash.toString();
+        }
+
+        function encodeShareData(records) {
+            try {
+                const json = JSON.stringify(records);
+                return btoa(unescape(encodeURIComponent(json)));
+            } catch (e) {
+                alert('Ошибка кодирования: ' + e);
+                return null;
+            }
+        }
+        function decodeShareData(base64) {
+            try {
+                const json = decodeURIComponent(escape(atob(base64)));
+                return JSON.parse(json);
+            } catch (e) {
+                console.warn('Не удалось декодировать данные из URL', e);
+                return null;
+            }
+        }
+
+        function generateShareableLink() {
+            if (records.length === 0) {
+                alert('Нет данных для создания ссылки.');
+                return;
+            }
+            const encoded = encodeShareData(records);
+            if (!encoded) return;
+            const url = new URL(window.location.href);
+            url.searchParams.set('share', encoded);
+            // Обновляем источник синхронизации для текущего пользователя
+            syncSourceUrl = url.toString();
+            lastSyncHash = computeDataHash(records);
+            localStorage.setItem('syncSourceUrl', syncSourceUrl);
+            localStorage.setItem('lastSyncHash', lastSyncHash);
+            updateSyncUI();
+
+            navigator.clipboard.writeText(url.toString()).then(() => {
+                alert('✅ Ссылка скопирована! Теперь другие могут синхронизироваться с этими данными.');
+            }).catch(() => {
+                prompt('🔗 Скопируйте ссылку вручную:', url.toString());
+            });
+        }
+
+        // Загрузка данных из URL (синхронизация)
+        async function syncFromUrl(url) {
+            try {
+                const response = await fetch(url);
+                const html = await response.text();
+                // Извлекаем параметр share из URL
+                const urlObj = new URL(url);
+                const shareParam = urlObj.searchParams.get('share');
+                if (!shareParam) throw new Error('В ссылке нет данных');
+                const newRecords = decodeShareData(shareParam);
+                if (!newRecords || !Array.isArray(newRecords)) throw new Error('Неверные данные');
+                const newHash = computeDataHash(newRecords);
+                if (lastSyncHash === newHash) {
+                    alert('Данные не изменились.');
+                    return false;
+                }
+                if (confirm(`Обнаружены новые данные (${newRecords.length} записей). Обновить?`)) {
+                    records = newRecords;
+                    syncSourceUrl = url;
+                    lastSyncHash = newHash;
+                    localStorage.setItem('syncSourceUrl', syncSourceUrl);
+                    localStorage.setItem('lastSyncHash', lastSyncHash);
+                    sortAndRefresh();
+                    updateSyncUI();
+                    return true;
+                }
+                return false;
+            } catch (error) {
+                alert('Ошибка синхронизации: ' + error.message);
+                return false;
+            }
+        }
+
+        function syncFromCurrentSource() {
+            if (!syncSourceUrl) {
+                // Попробуем взять URL из текущего адреса (если там есть share)
+                const params = new URLSearchParams(window.location.search);
+                if (params.has('share')) {
+                    syncSourceUrl = window.location.href;
+                } else {
+                    alert('Нет сохранённого источника синхронизации. Сначала откройте общую ссылку или введите её вручную.');
+                    const manualUrl = prompt('Введите URL общей ссылки:');
+                    if (manualUrl) {
+                        syncSourceUrl = manualUrl;
+                        syncFromUrl(manualUrl);
+                    }
+                    return;
                 }
             }
-            if (newRecords.length===0) throw new Error('Нет данных');
-            if (confirm(`Найдено ${newRecords.length} записей. Заменить текущие?`)) records = newRecords;
-            else records.push(...newRecords);
-            sortAndRefresh();
-            alert(`Импортировано ${newRecords.length}`);
-        }).catch(err => alert('Ошибка: ' + err.message));
-    }
-    function downloadExcelTemplate() {
-        const templateData = [["Дата","Остаток"],["14.04.2026",32089],["15.04.2026",31289]];
-        if (typeof XLSX === 'undefined') {
-            let csv = templateData.map(row=>row.join(",")).join("\n");
-            const blob = new Blob(["\uFEFF"+csv], {type:"text/csv"});
-            const link = document.createElement('a');
-            link.href = URL.createObjectURL(blob);
-            link.download = `template_stock_${new Date().toISOString().slice(0,10)}.csv`;
-            link.click();
-            URL.revokeObjectURL(blob);
-            return;
+            syncFromUrl(syncSourceUrl);
         }
-        const ws = XLSX.utils.aoa_to_sheet(templateData);
-        const wb = XLSX.utils.book_new();
-        XLSX.utils.book_append_sheet(wb, ws, "Шаблон");
-        XLSX.writeFile(wb, `template_stock_${new Date().toISOString().slice(0,10)}.xlsx`);
-    }
-    function handleExcelUpload(file) {
-        if (typeof XLSX === 'undefined') { alert('XLSX не загружен'); return; }
-        const reader = new FileReader();
-        reader.onload = function(e) {
-            const data = new Uint8Array(e.target.result);
-            const workbook = XLSX.read(data, { type: 'array' });
-            const sheet = workbook.Sheets[workbook.SheetNames[0]];
-            const rows = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: "" });
-            let newRecords = [];
-            for (let i=1; i<rows.length; i++) {
-                let dateVal = rows[i][0]?.toString().trim();
-                let qtyVal = rows[i][1];
-                if (!dateVal || qtyVal===undefined) continue;
-                let qty = Number(qtyVal);
-                if (isNaN(qty)) continue;
-                let iso = parseDateToISO(dateVal);
-                if (!iso) continue;
-                newRecords.push({ dateISO: iso, displayDate: formatDisplayFromISO(iso), quantity: Math.floor(qty) });
+
+        function updateSyncUI() {
+            if (syncSourceUrl) {
+                syncSourceInfo.textContent = `📡 Источник: ${new URL(syncSourceUrl).hostname}...`;
+            } else {
+                syncSourceInfo.textContent = '🔌 Нет активного источника';
             }
-            if (newRecords.length===0) { alert('Нет корректных строк'); return; }
-            if (confirm(`Найдено ${newRecords.length} записей. Заменить текущие?`)) records = newRecords;
-            else records.push(...newRecords);
-            sortAndRefresh();
-        };
-        reader.readAsArrayBuffer(file);
-    }
-    function loadDemoData() {
-        if (confirm('Загрузить демо-данные (12 дней)?')) {
-            const demo = [];
-            let baseDate = new Date(2026,3,10);
-            let qty = 34000;
-            for (let i=0;i<12;i++) {
-                let date = new Date(baseDate); date.setDate(baseDate.getDate()+i);
-                let iso = date.toISOString().split('T')[0];
-                qty = Math.max(2000, qty - Math.floor(Math.random()*500)-300);
-                demo.push({ dateISO: iso, displayDate: formatDisplayFromISO(iso), quantity: qty });
-            }
-            records = demo;
-            sortAndRefresh();
         }
-    }
-    function resetToDefault() { if (confirm('Сбросить к исходным данным?')) { records = DEFAULT_RECORDS.map(r=>({...r})); sortAndRefresh(); } }
-    function exportJSON() { const dataStr = JSON.stringify(records,null,2); const blob = new Blob([dataStr], {type:'application/json'}); const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = `stock_${new Date().toISOString().slice(0,19)}.json`; a.click(); URL.revokeObjectURL(blob); }
-    function exportCSV() { let csv = [["Дата","Остаток"]]; records.forEach(r=>csv.push([r.displayDate, r.quantity])); const blob = new Blob(["\uFEFF"+csv.map(row=>row.join(",")).join("\n")], {type:"text/csv"}); const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = `stock_${new Date().toISOString().slice(0,19)}.csv`; a.click(); URL.revokeObjectURL(blob); }
-    function importData(file) { const reader = new FileReader(); reader.onload = (e) => { try { const imported = JSON.parse(e.target.result); if (Array.isArray(imported) && imported.every(i=>i.dateISO && typeof i.quantity==='number')) { records = imported; sortAndRefresh(); } else alert('Неверный формат'); } catch(err) { alert('Ошибка JSON'); } }; reader.readAsText(file); }
-    function initSorting() { document.querySelectorAll('[data-sort]').forEach(header => { header.addEventListener('click', () => { const col = header.dataset.sort; if (currentSort.column === col) currentSort.ascending = !currentSort.ascending; else { currentSort.column = col; currentSort.ascending = true; } sortAndRefresh(); }); }); }
-    function initTheme() { const isDark = localStorage.getItem('darkTheme') === 'true'; if (isDark) document.body.classList.add('dark'); themeToggle.textContent = isDark ? '☀️ Светлая тема' : '🌙 Тёмная тема'; themeToggle.onclick = () => { document.body.classList.toggle('dark'); const darkNow = document.body.classList.contains('dark'); localStorage.setItem('darkTheme', darkNow); themeToggle.textContent = darkNow ? '☀️ Светлая тема' : '🌙 Тёмная тема'; }; }
-    thresholdSlider.addEventListener('input', (e) => { criticalThreshold = parseInt(e.target.value); thresholdSpan.innerText = criticalThreshold; localStorage.setItem('criticalThreshold', criticalThreshold); renderTable(); });
-    showMovingAvgCheck.addEventListener('change', (e) => { showMovingAvg = e.target.checked; updateChart(); });
-    closeModalBtn.onclick = () => modal.style.display = 'none';
-    restoreFromPreviewBtn.onclick = () => restoreFromPreview();
-    window.onclick = (e) => { if (e.target === modal) modal.style.display = 'none'; };
-    function init() {
-        loadFromLocalStorage();
-        sortRecords();
-        renderTable();
-        updateStats();
-        updateChart();
-        initSorting();
-        initTheme();
-        renderSnapshots();
-        addBtn.addEventListener('click', addOrUpdate);
-        resetBtn.addEventListener('click', resetToDefault);
-        exportJsonBtn.addEventListener('click', exportJSON);
-        exportCsvBtn.addEventListener('click', exportCSV);
-        importBtn.addEventListener('click', () => importFile.click());
-        importFile.addEventListener('change', (e) => { if(e.target.files.length) importData(e.target.files[0]); importFile.value=''; });
-        downloadTemplateBtn.addEventListener('click', downloadExcelTemplate);
-        excelUploadBtn.addEventListener('click', () => excelFile.click());
-        excelFile.addEventListener('change', (e) => { if(e.target.files.length) handleExcelUpload(e.target.files[0]); excelFile.value=''; });
-        googleExportBtn.addEventListener('click', exportToGoogleSheets);
-        googleImportBtn.addEventListener('click', importFromGoogleSheets);
-        demoBtn.addEventListener('click', loadDemoData);
-        saveSnapshotBtn.addEventListener('click', saveSnapshot);
-        clearAllSnapshotsBtn.addEventListener('click', clearAllSnapshots);
-        quickMinus100.addEventListener('click', () => quickChange(-100));
-        quickMinus500.addEventListener('click', () => quickChange(-500));
-        quickPlus100.addEventListener('click', () => quickChange(100));
-    }
-    init();
+
+        // Автосинхронизация
+        function startAutoSync() {
+            if (autoSyncTimer) clearInterval(autoSyncTimer);
+            autoSyncTimer = setInterval(() => {
+                if (!syncSourceUrl) return;
+                // Тихо проверяем изменения
+                fetch(syncSourceUrl).then(res => res.text()).then(html => {
+                    const urlObj = new URL(syncSourceUrl);
+                    const shareParam = urlObj.searchParams.get('share');
+                    if (!shareParam) return;
+                    const newRecords = decodeShareData(shareParam);
+                    if (!newRecords) return;
+                    const newHash = computeDataHash(newRecords);
+                    if (lastSyncHash && lastSyncHash !== newHash) {
+                        if (confirm('Обнаружены изменения в общих данных. Обновить?')) {
+                            records = newRecords;
+                            lastSyncHash = newHash;
+                            localStorage.setItem('lastSyncHash', lastSyncHash);
+                            sortAndRefresh();
+                        }
+                    }
+                }).catch(e => console.warn('Автосинхронизация: ошибка', e));
+            }, AUTO_SYNC_INTERVAL);
+        }
+
+        function stopAutoSync() {
+            if (autoSyncTimer) {
+                clearInterval(autoSyncTimer);
+                autoSyncTimer = null;
+            }
+        }
+
+        function toggleAutoSync(enabled) {
+            if (enabled) {
+                startAutoSync();
+                localStorage.setItem('autoSyncEnabled', 'true');
+            } else {
+                stopAutoSync();
+                localStorage.setItem('autoSyncEnabled', 'false');
+            }
+        }
+
+        // Проверка параметра share при загрузке страницы
+        function checkShareParam() {
+            const params = new URLSearchParams(window.location.search);
+            const shareData = params.get('share');
+            if (!shareData) return;
+            const decoded = decodeShareData(shareData);
+            if (decoded && Array.isArray(decoded) && decoded.length > 0) {
+                if (confirm(`Обнаружены общие данные (${decoded.length} записей). Загрузить их?`)) {
+                    records = decoded;
+                    syncSourceUrl = window.location.href;
+                    lastSyncHash = computeDataHash(decoded);
+                    localStorage.setItem('syncSourceUrl', syncSourceUrl);
+                    localStorage.setItem('lastSyncHash', lastSyncHash);
+                    sortAndRefresh();
+                }
+                // Убираем параметр из URL
+                const url = new URL(window.location.href);
+                url.searchParams.delete('share');
+                window.history.replaceState({}, document.title, url.toString());
+            } else {
+                alert('Не удалось загрузить данные из ссылки.');
+            }
+            updateSyncUI();
+        }
+
+        // ---------- ИНИЦИАЛИЗАЦИЯ ----------
+        function initSorting() {
+            document.querySelectorAll('[data-sort]').forEach(header => {
+                header.addEventListener('click', () => {
+                    const col = header.dataset.sort;
+                    if (currentSort.column === col) currentSort.ascending = !currentSort.ascending;
+                    else { currentSort.column = col; currentSort.ascending = true; }
+                    sortAndRefresh();
+                });
+            });
+        }
+        function initTheme() {
+            const isDark = localStorage.getItem('darkTheme') === 'true';
+            if (isDark) document.body.classList.add('dark');
+            themeToggle.textContent = isDark ? '☀️ Светлая тема' : '🌙 Тёмная тема';
+            themeToggle.onclick = () => {
+                document.body.classList.toggle('dark');
+                const darkNow = document.body.classList.contains('dark');
+                localStorage.setItem('darkTheme', darkNow);
+                themeToggle.textContent = darkNow ? '☀️ Светлая тема' : '🌙 Тёмная тема';
+            };
+        }
+
+        function init() {
+            loadFromLocalStorage();
+            sortRecords();
+            renderTable();
+            updateStats();
+            updateChart();
+            initSorting();
+            initTheme();
+            renderSnapshots();
+            updateSyncUI();
+
+            // Восстановление автосинхронизации
+            const autoSyncEnabled = localStorage.getItem('autoSyncEnabled') === 'true';
+            autoSyncCheck.checked = autoSyncEnabled;
+            if (autoSyncEnabled) startAutoSync();
+
+            addBtn.addEventListener('click', addOrUpdate);
+            resetBtn.addEventListener('click', resetToDefault);
+            exportJsonBtn.addEventListener('click', exportJSON);
+            exportCsvBtn.addEventListener('click', exportCSV);
+            importBtn.addEventListener('click', () => importFile.click());
+            importFile.addEventListener('change', (e) => { if(e.target.files.length) importData(e.target.files[0]); importFile.value=''; });
+            downloadTemplateBtn.addEventListener('click', downloadExcelTemplate);
+            excelUploadBtn.addEventListener('click', () => excelFile.click());
+            excelFile.addEventListener('change', (e) => { if(e.target.files.length) handleExcelUpload(e.target.files[0]); excelFile.value=''; });
+            googleExportBtn.addEventListener('click', exportToGoogleSheets);
+            googleImportBtn.addEventListener('click', importFromGoogleSheets);
+            demoBtn.addEventListener('click', loadDemoData);
+            saveSnapshotBtn.addEventListener('click', saveSnapshot);
+            clearAllSnapshotsBtn.addEventListener('click', clearAllSnapshots);
+            quickMinus100.addEventListener('click', () => quickChange(-100));
+            quickMinus500.addEventListener('click', () => quickChange(-500));
+            quickPlus100.addEventListener('click', () => quickChange(100));
+            shareLinkBtn.addEventListener('click', generateShareableLink);
+            syncFromLinkBtn.addEventListener('click', syncFromCurrentSource);
+            autoSyncCheck.addEventListener('change', (e) => toggleAutoSync(e.target.checked));
+
+            thresholdSlider.addEventListener('input', (e) => { criticalThreshold = parseInt(e.target.value); thresholdSpan.innerText = criticalThreshold; localStorage.setItem('criticalThreshold', criticalThreshold); renderTable(); });
+            showMovingAvgCheck.addEventListener('change', (e) => { showMovingAvg = e.target.checked; updateChart(); });
+            closeModalBtn.onclick = () => modal.style.display = 'none';
+            restoreFromPreviewBtn.onclick = () => restoreFromPreview();
+            window.onclick = (e) => { if (e.target === modal) modal.style.display = 'none'; };
+
+            // Проверяем параметр share при загрузке (после загрузки из localStorage)
+            checkShareParam();
+        }
+
+        init();
+    })();
 </script>
 </body>
 </html>
